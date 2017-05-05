@@ -1,0 +1,225 @@
+---
+title: "Machine Learning"
+author: "PL"
+date: "02/05/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(caret)
+library(dplyr)
+
+library(rpart)
+set.seed(3697)
+```
+
+## Summary
+
+The goal of this project is to use the data provided by wearable devices in order to build a model capable of telling whether the excercise was done correctly or incorrectly. A specific form of excercise, barbell lifts, was repeated by 6 participants in 5 different ways, both correctly an incorrectly. The report below details data processing, exploratory analysis, model selection, model validation, estimation of out of sample error and testing the model on a separate set of data.
+
+## Data processing
+
+The data primarily consists of readings from four accelerometers devices located on the: belt, forearm, arm, and dumbbell. However, the dataset contains information in 160 variables. The first step is to identify potential variables to be included in the model.
+
+Literature review (http://groupware.les.inf.puc-rio.br/work.jsf?p1=10335) suggested that average and std values will be most helpful. Thus we will try to replicate these findings working with a subset of the data containing summaries of the observations in the form of averages and standard deviations and comparing with subsets containing other variables.
+
+
+```{r data}
+training = read.csv("pml-training.csv")
+test_final = read.csv("pml-testing.csv")
+
+#Select avg and std values
+var.wanted<-names(training)
+var.wantedX<-var.wanted[c(grep('avg_', x=var.wanted),grep('stddev',x=var.wanted))]
+train<-select(training,one_of(c(var.wantedX)))
+test<-select(test_final,one_of(c(var.wantedX)))
+#Add classe
+train$classe<-training$classe
+test$classe<-test_final$classe
+#Check what is there
+#str(train)
+# Quite a lot of these values are NA
+#mean(is.na(train[,1]))
+
+# Find complete cases
+exclude<-complete.cases(train[,1])
+train<-filter(train,exclude)
+
+#str(train)
+
+#Divide the dataset into training and testing for modelling
+inTrain <- createDataPartition(train$classe, p=0.6, list=FALSE)
+training <- train[inTrain, ]
+testing <- train[-inTrain, ]
+#dim(training)
+#dim(testing)
+
+```
+
+
+## Random Forests model with 3 fold cross-validation
+
+```{r model1}
+#Using random forest
+control <- trainControl(method = "cv", number = 3)
+modrf <- train(classe~ .,data=training,method="rf", trControl = control)
+
+print(modrf, digits = 3)
+predrf = predict(modrf,testing)
+
+#accuracy
+testing$predRight <- predrf==testing$classe
+ac_rf<-mean(testing$predRight)
+
+confusionMatrix(predrf,testing$classe)
+
+```
+
+Training the random forest model from the caret package, we get the accuracy of around `r ac_rf`. Out of sample error is around 30%.
+
+```{r cross}
+
+#result <- rfcv(training, training$classe, cv.fold=3)
+#with(result, plot(n.var, error.cv, log="x", type="o", lwd=2,main = "Cross Validation"))
+
+
+```
+
+However, one of the problems with this approach is that the data provided for testing contains no information for these set of predictors and so is useless in this approach.
+
+
+
+
+## Alternatives
+
+In the following sections we consider alternative methods and alternative set of predictors.
+
+###Alternative models used with the same variables
+
+We can see if another method does better.
+
+```{r model2}
+#lda
+modlda <- train(classe ~.,data=training,method="lda")
+#print(modlda)
+
+predlda = predict(modlda,testing)
+table(predlda,testing$classe)
+
+#accuracy lda
+testing$predRightlda <- predlda==testing$classe
+ac_lda<-mean(testing$predRightlda)
+```
+Training the "lda" model from the caret package, we get the accuracy of around `r ac_lda`. 
+
+```{r model3}
+modgbm <- train(classe ~.,data=training,method="gbm", verbose=FALSE)
+predgbm = predict(modgbm,testing)
+table(predgbm,testing$classe)
+#accuracy gbm
+testing$predRightgbm <- predgbm==testing$classe
+ac_gbm<-mean(testing$predRightgbm)
+
+modrpart <- rpart(classe ~ ., data=training, method="class")
+predrpart <- predict(modrpart, testing, type = "class")
+#confusionMatrix(predrpart, testing$classe)
+table(predrpart, testing$classe)
+#accuracy rpart
+testing$predRightrpart <- predrpart==testing$classe
+ac_rpart<-mean(testing$predRightrpart)
+```
+
+Using the "gbm" method, we get the accuracy of around `r ac_gbm`; "rpart" method yielded accuracy of about `r ac_rpart`. Combining these models seems to reduce accuracy. 
+
+
+
+### Using a larger and different number of variables
+
+It is possible that we are discarding too much of the data. So we tried using more predictors.
+
+```{r model_moreData}
+#more data
+detach("package:MASS", unload=TRUE)
+library(dplyr)
+temp = read.csv("pml-training.csv")
+var.wanted<-names(temp)
+var.wanted<-var.wanted[c(grep('^accel_', x=var.wanted),
+                         grep('^gyros_', x=var.wanted),
+                         grep('^magnet_', x=var.wanted),
+                         grep('^roll_', x=var.wanted),
+                         grep('^pitch_', x=var.wanted),
+                         grep('^yaw_', x=var.wanted))]
+
+trainingA<-select(temp,one_of(c(var.wanted)))
+trainingA$classe<-temp$classe
+
+#partition the subset
+inTrain <- createDataPartition(y=trainingA$classe, p=0.6, list = FALSE)
+trainingX <- trainingA[inTrain, ]
+testingX <- trainingA[-inTrain, ]
+
+#LDA
+modlda <- train(classe ~.,data=training,method="lda")
+predlda = predict(modlda,testing)
+#table(predlda,testing$classe)
+#accuracy lda
+testing$predRightlda <- predlda==testing$classe
+ac_lda_more<-mean(testing$predRightlda)
+
+
+#rpart
+modrpart <- rpart(classe ~ ., data=training, method="class")
+predrpart <- predict(modrpart, testing, type = "class")
+#table(predrpart, testing$classe)
+
+#accuracy rpart
+testing$predRightrpart <- predrpart==testing$classe
+ac_rpart_more<-mean(testing$predRightrpart)
+```
+
+Using "lda" method from the caret package with more variables, we increase the accuracy of predictions from `r ac_lda` to `r ac_lda_more`. Where the accuracy for "rpart" method changes from `r ac_rpart` to `r ac_rpart_more`. The "gbm" and random forests methods become slower with a larger subset of data. If computational time is not an issue, it is possible to achieve much greater accuracy by using all of the predictors which have no missing values, and getting rid of the first seven collumns: observation number, person's name, time info, more time info, etc.  
+
+Below are the calculations that take longer, but result in much higher precision when it comes to classification. 
+
+```{r precise}
+#longer data, longer time 
+training   <-read.csv("pml-training.csv", na.strings=c("NA","#DIV/0!", ""))
+training<-training[,colSums(is.na(training)) == 0]
+training   <-training[,-c(1:7)]
+
+inTrain <- createDataPartition(training$classe, p=0.6, list=FALSE)
+train <- training[inTrain, ]
+test <- training[-inTrain, ]
+
+modrf <- train(classe~ .,data=train,method="rf")
+predrf = predict(modrf,test)
+#accuracy
+test$predRight <- predrf==test$classe
+ac_rf_most<-mean(test$predRight)
+table(predrf,test$classe)
+
+#20 observations for testing
+final_test   <-read.csv("pml-testing.csv", na.strings=c("NA","#DIV/0!", ""))
+final_test<-final_test[,colSums(is.na(final_test)) == 0]
+# Subset data
+final_test   <-final_test[,-c(1:7)]
+pred = predict(modrf,final_test)
+library(MASS)
+```
+
+The classes predicted for the test dataset provided are `r pred`, the model should get only about 1% of them wrong.
+
+
+### Conclusion
+
+It seems that the best approach is using Random Forests method with a subset of data containing variables with average and sd values, that is predictors listed below. 
+
+```{r list}
+library(knitr)
+kable(sort(var.wantedX), caption = "List of variables in the prefered model")
+```
+
+The calculations are quick because the dataset is much smaller since only key statistics (mean and sd) describing observations are used. However, for greater precision, use 'raw' data from accelerometers with a random forests method of the caret package, if computational time is not an issue.  
+
+
